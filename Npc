@@ -1,0 +1,807 @@
+
+-- UNIVERSAL DEVELOPER HUB
+-- CLIENT EDITION | ROBLOX STUDIO
+-- Mobile | Single LocalScript
+-- NPC ESP + HEAD/BODY HITBOX DEBUG
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local TeleportService = game:GetService("TeleportService")
+local Workspace = game:GetService("Workspace")
+
+local Player = Players.LocalPlayer
+local PlayerGui = Player:WaitForChild("PlayerGui")
+local NPCFolder = Workspace:WaitForChild("NPCs", 10)
+
+local Config = {
+    ESP = false,
+    ESPName = true,
+    ESPHealth = true,
+    ESPDistance = true,
+    ESPMaxDistance = 1000,
+    ESPSize = 14,
+
+    HitboxVisual = false,
+    ShowHead = true,
+    ShowBody = true,
+    HeadScale = 1,
+    BodyScale = 1,
+
+    Performance = "Normal"
+}
+
+local Colors = {
+    Head = Color3.fromRGB(255, 55, 65),
+    Body = Color3.fromRGB(55, 150, 255),
+    Text = Color3.fromRGB(255, 255, 255),
+    Accent = Color3.fromRGB(100, 130, 255),
+    Background = Color3.fromRGB(20, 22, 31),
+    Panel = Color3.fromRGB(28, 30, 43),
+    Button = Color3.fromRGB(42, 46, 63),
+    Active = Color3.fromRGB(55, 110, 90)
+}
+
+local TeamColors = {
+    Color3.fromRGB(255,65,65),
+    Color3.fromRGB(65,150,255),
+    Color3.fromRGB(65,255,120),
+    Color3.fromRGB(255,220,65),
+    Color3.fromRGB(190,75,255),
+    Color3.fromRGB(255,130,50),
+    Color3.fromRGB(50,255,230),
+    Color3.fromRGB(255,100,190)
+}
+
+local ESPObjects = {}
+local HitboxObjects = {}
+local Connections = {}
+local Destroyed = false
+
+-- HELPERS
+
+local function GetHumanoid(npc)
+    return npc:FindFirstChildOfClass("Humanoid")
+end
+
+local function GetRoot(npc)
+    return npc:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetHead(npc)
+    return npc:FindFirstChild("Head")
+end
+
+local function GetBody(npc)
+    return npc:FindFirstChild("UpperTorso")
+        or npc:FindFirstChild("Torso")
+        or npc:FindFirstChild("LowerTorso")
+        or npc:FindFirstChild("HumanoidRootPart")
+end
+
+local function GetNPCColor(npc)
+    local team = tonumber(npc:GetAttribute("Team")) or 1
+    team = math.clamp(team, 1, 8)
+    return TeamColors[team]
+end
+
+local function GetDistance(npc)
+    local camera = Workspace.CurrentCamera
+    local root = GetRoot(npc)
+
+    if not camera or not root then
+        return math.huge
+    end
+
+    return (camera.CFrame.Position - root.Position).Magnitude
+end
+
+local function GetNPCs()
+    local result = {}
+
+    if not NPCFolder then
+        return result
+    end
+
+    for _, npc in ipairs(NPCFolder:GetChildren()) do
+        if npc:IsA("Model") then
+            local humanoid = GetHumanoid(npc)
+            local root = GetRoot(npc)
+
+            if humanoid and root and humanoid.Health > 0 then
+                table.insert(result, npc)
+            end
+        end
+    end
+
+    return result
+end
+
+-- GUI
+
+local Gui = Instance.new("ScreenGui")
+Gui.Name = "UniversalDeveloperHub"
+Gui.ResetOnSpawn = false
+Gui.DisplayOrder = 999
+Gui.Parent = PlayerGui
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.fromOffset(530, 390)
+Main.Position = UDim2.new(0.5, -265, 0.5, -195)
+Main.BackgroundColor3 = Colors.Background
+Main.BorderSizePixel = 0
+Main.Parent = Gui
+
+Instance.new("UICorner", Main).CornerRadius = UDim.new(0, 12)
+
+local MainStroke = Instance.new("UIStroke", Main)
+MainStroke.Color = Colors.Accent
+MainStroke.Thickness = 1.5
+
+local Header = Instance.new("TextButton")
+Header.Size = UDim2.new(1, 0, 0, 45)
+Header.BackgroundColor3 = Color3.fromRGB(31, 34, 49)
+Header.Text = "  UNIVERSAL DEVELOPER HUB"
+Header.TextColor3 = Colors.Text
+Header.TextXAlignment = Enum.TextXAlignment.Left
+Header.Font = Enum.Font.GothamBold
+Header.TextSize = 15
+Header.Parent = Main
+
+Instance.new("UICorner", Header).CornerRadius = UDim.new(0, 12)
+
+local Close = Instance.new("TextButton")
+Close.Size = UDim2.fromOffset(38, 35)
+Close.Position = UDim2.new(1, -43, 0, 5)
+Close.BackgroundColor3 = Color3.fromRGB(185, 55, 65)
+Close.Text = "X"
+Close.TextColor3 = Colors.Text
+Close.Font = Enum.Font.GothamBold
+Close.TextSize = 14
+Close.Parent = Main
+
+Instance.new("UICorner", Close)
+
+local OpenButton = Instance.new("TextButton")
+OpenButton.Size = UDim2.fromOffset(58, 58)
+OpenButton.Position = UDim2.new(0, 15, 0.5, 0)
+OpenButton.BackgroundColor3 = Colors.Accent
+OpenButton.Text = "HUB"
+OpenButton.TextColor3 = Colors.Text
+OpenButton.Font = Enum.Font.GothamBold
+OpenButton.TextSize = 15
+OpenButton.Visible = false
+OpenButton.Parent = Gui
+
+Instance.new("UICorner", OpenButton).CornerRadius = UDim.new(1, 0)
+
+Close.MouseButton1Click:Connect(function()
+    Main.Visible = false
+    OpenButton.Visible = true
+end)
+
+OpenButton.MouseButton1Click:Connect(function()
+    Main.Visible = true
+    OpenButton.Visible = false
+end)
+
+-- DRAG SUPPORT
+
+local dragging = false
+local dragStart
+local startPosition
+
+Header.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true
+        dragStart = input.Position
+        startPosition = Main.Position
+    end
+end)
+
+UIS.InputChanged:Connect(function(input)
+    if dragging and (
+        input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch
+    ) then
+        local delta = input.Position - dragStart
+
+        Main.Position = UDim2.new(
+            startPosition.X.Scale,
+            startPosition.X.Offset + delta.X,
+            startPosition.Y.Scale,
+            startPosition.Y.Offset + delta.Y
+        )
+    end
+end)
+
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+    or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = false
+    end
+end)
+
+-- SIDEBAR
+
+local Sidebar = Instance.new("Frame")
+Sidebar.Position = UDim2.fromOffset(8, 53)
+Sidebar.Size = UDim2.new(0, 115, 1, -61)
+Sidebar.BackgroundColor3 = Colors.Panel
+Sidebar.Parent = Main
+
+Instance.new("UICorner", Sidebar)
+
+local SideLayout = Instance.new("UIListLayout", Sidebar)
+SideLayout.Padding = UDim.new(0, 6)
+
+local SidePadding = Instance.new("UIPadding", Sidebar)
+SidePadding.PaddingTop = UDim.new(0, 8)
+SidePadding.PaddingLeft = UDim.new(0, 6)
+SidePadding.PaddingRight = UDim.new(0, 6)
+
+local Content = Instance.new("ScrollingFrame")
+Content.Position = UDim2.fromOffset(132, 53)
+Content.Size = UDim2.new(1, -140, 1, -61)
+Content.BackgroundColor3 = Colors.Panel
+Content.BorderSizePixel = 0
+Content.ScrollBarThickness = 3
+Content.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Content.CanvasSize = UDim2.new()
+Content.Parent = Main
+
+Instance.new("UICorner", Content)
+
+local ContentLayout = Instance.new("UIListLayout", Content)
+ContentLayout.Padding = UDim.new(0, 7)
+ContentLayout.SortOrder = Enum.SortOrder.LayoutOrder
+
+local ContentPadding = Instance.new("UIPadding", Content)
+ContentPadding.PaddingTop = UDim.new(0, 10)
+ContentPadding.PaddingLeft = UDim.new(0, 9)
+ContentPadding.PaddingRight = UDim.new(0, 9)
+
+-- UI COMPONENTS
+
+local function ClearContent()
+    for _, item in ipairs(Content:GetChildren()) do
+        if item:IsA("GuiObject")
+        and item ~= ContentLayout
+        and item ~= ContentPadding then
+            item:Destroy()
+        end
+    end
+end
+
+local function Section(name)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -5, 0, 28)
+    label.BackgroundTransparency = 1
+    label.Text = "  " .. name
+    label.TextColor3 = Colors.Accent
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = 14
+    label.Parent = Content
+end
+
+local function Toggle(name, initial, callback)
+    local state = initial
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, -5, 0, 38)
+    button.BackgroundColor3 = Colors.Button
+    button.TextColor3 = Colors.Text
+    button.Font = Enum.Font.Gotham
+    button.TextSize = 13
+    button.Parent = Content
+
+    Instance.new("UICorner", button)
+
+    local function Update()
+        button.Text = name .. " : " .. (state and "ON" or "OFF")
+        button.BackgroundColor3 = state and Colors.Active or Colors.Button
+    end
+
+    button.MouseButton1Click:Connect(function()
+        state = not state
+        Update()
+        callback(state)
+    end)
+
+    Update()
+end
+
+local function Slider(name, min, max, default, callback)
+    local value = Instance.new("TextBox")
+    value.Size = UDim2.new(1, -5, 0, 38)
+    value.BackgroundColor3 = Colors.Button
+    value.TextColor3 = Colors.Text
+    value.Font = Enum.Font.Gotham
+    value.TextSize = 13
+    value.Text = name .. " : " .. default
+    value.ClearTextOnFocus = false
+    value.Parent = Content
+
+    Instance.new("UICorner", value)
+
+    value.FocusLost:Connect(function()
+        local number = tonumber(value.Text:match("[%d%.]+"))
+
+        if number then
+            number = math.clamp(number, min, max)
+            value.Text = name .. " : " .. number
+            callback(number)
+        else
+            value.Text = name .. " : " .. default
+        end
+    end)
+end
+
+local function Dropdown(name, options, callback)
+    local index = 1
+
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, -5, 0, 38)
+    button.BackgroundColor3 = Colors.Button
+    button.TextColor3 = Colors.Text
+    button.Font = Enum.Font.Gotham
+    button.TextSize = 13
+    button.Parent = Content
+
+    Instance.new("UICorner", button)
+
+    local function Update()
+        button.Text = name .. " : " .. options[index]
+    end
+
+    button.MouseButton1Click:Connect(function()
+        index = index % #options + 1
+        Update()
+        callback(options[index])
+    end)
+
+    Update()
+end
+
+local function ActionButton(name, callback)
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, -5, 0, 40)
+    button.BackgroundColor3 = Colors.Accent
+    button.TextColor3 = Colors.Text
+    button.Text = name
+    button.Font = Enum.Font.GothamBold
+    button.TextSize = 13
+    button.Parent = Content
+
+    Instance.new("UICorner", button)
+
+    button.MouseButton1Click:Connect(callback)
+end
+
+-- ESP
+
+local function RemoveESP(npc)
+    local data = ESPObjects[npc]
+
+    if data then
+        data.Billboard:Destroy()
+        ESPObjects[npc] = nil
+    end
+end
+
+local function CreateESP(npc)
+    if ESPObjects[npc] then
+        return
+    end
+
+    local head = GetHead(npc) or GetRoot(npc)
+
+    if not head then
+        return
+    end
+
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "DeveloperNPCESP"
+    billboard.Adornee = head
+    billboard.Size = UDim2.fromOffset(200, 65)
+    billboard.StudsOffset = Vector3.new(0, 2.5, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = Gui
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.fromScale(1, 1)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = GetNPCColor(npc)
+    label.TextStrokeTransparency = 0
+    label.Font = Enum.Font.GothamBold
+    label.TextSize = Config.ESPSize
+    label.Parent = billboard
+
+    ESPObjects[npc] = {
+        Billboard = billboard,
+        Label = label
+    }
+end
+
+local function UpdateESP(npc)
+    if not Config.ESP then
+        RemoveESP(npc)
+        return
+    end
+
+    CreateESP(npc)
+
+    local data = ESPObjects[npc]
+    local humanoid = GetHumanoid(npc)
+
+    if not data or not humanoid then
+        return
+    end
+
+    local distance = GetDistance(npc)
+
+    data.Billboard.Enabled = distance <= Config.ESPMaxDistance
+
+    local lines = {}
+
+    if Config.ESPName then
+        table.insert(lines, npc.Name)
+    end
+
+    if Config.ESPHealth then
+        table.insert(lines, "HP: " .. math.floor(humanoid.Health)
+            .. "/" .. math.floor(humanoid.MaxHealth))
+    end
+
+    if Config.ESPDistance then
+        table.insert(lines, math.floor(distance) .. " studs")
+    end
+
+    data.Label.Text = table.concat(lines, "\n")
+    data.Label.TextSize = Config.ESPSize
+    data.Label.TextColor3 = GetNPCColor(npc)
+end
+
+-- HEAD / BODY HITBOX VISUALIZER
+-- Không thay đổi kích thước va chạm thật.
+
+local function CreateBox(part, color, name)
+    if not part or not part:IsA("BasePart") then
+        return nil
+    end
+
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = name
+    box.Adornee = part
+    box.AlwaysOnTop = true
+    box.ZIndex = 5
+    box.Transparency = 0.35
+    box.Color3 = color
+    box.Size = part.Size
+    box.Parent = part
+
+    return box
+end
+
+local function RemoveHitboxVisual(npc)
+    local data = HitboxObjects[npc]
+
+    if not data then
+        return
+    end
+
+    if data.Head then
+        data.Head:Destroy()
+    end
+
+    if data.Body then
+        data.Body:Destroy()
+    end
+
+    HitboxObjects[npc] = nil
+end
+
+local function UpdateHitboxVisual(npc)
+    if not Config.HitboxVisual then
+        RemoveHitboxVisual(npc)
+        return
+    end
+
+    local head = GetHead(npc)
+    local body = GetBody(npc)
+
+    local data = HitboxObjects[npc]
+
+    if not data then
+        data = {}
+        HitboxObjects[npc] = data
+    end
+
+    -- HEAD: RED
+
+    if Config.ShowHead and head then
+        if not data.Head or data.Head.Adornee ~= head then
+            if data.Head then
+                data.Head:Destroy()
+            end
+
+            data.Head = CreateBox(
+                head,
+                Colors.Head,
+                "NPC_Head_Debug"
+            )
+        end
+
+        if data.Head then
+            data.Head.Size = head.Size * Config.HeadScale
+        end
+    elseif data.Head then
+        data.Head:Destroy()
+        data.Head = nil
+    end
+
+    -- BODY: BLUE
+
+    if Config.ShowBody and body then
+        if not data.Body or data.Body.Adornee ~= body then
+            if data.Body then
+                data.Body:Destroy()
+            end
+
+            data.Body = CreateBox(
+                body,
+                Colors.Body,
+                "NPC_Body_Debug"
+            )
+        end
+
+        if data.Body then
+            data.Body.Size = body.Size * Config.BodyScale
+        end
+    elseif data.Body then
+        data.Body:Destroy()
+        data.Body = nil
+    end
+end
+
+-- AIM TAB: NPC SELECTION DEBUG ONLY
+
+local function AimTab()
+    ClearContent()
+
+    Section("NPC TARGET DEBUG")
+
+    Toggle("Enable NPC Selection", false, function(v)
+        Config.AimNPC = v
+    end)
+
+    Dropdown("Target Part", {"Head", "Body"}, function(v)
+        Config.AimPart = v
+    end)
+
+    Slider("Maximum Distance", 100, 1000, 1000, function(v)
+        Config.AimDistance = v
+    end)
+
+    Toggle("Team Check", false, function(v)
+        Config.TeamCheck = v
+    end)
+
+    Section("TARGET INFORMATION")
+
+    local info = Instance.new("TextLabel")
+    info.Name = "TargetInfo"
+    info.Size = UDim2.new(1, -5, 0, 50)
+    info.BackgroundColor3 = Colors.Button
+    info.TextColor3 = Colors.Text
+    info.Text = "NPC selection is disabled"
+    info.Font = Enum.Font.Gotham
+    info.TextSize = 12
+    info.Parent = Content
+
+    Instance.new("UICorner", info)
+
+    local function UpdateTargetInfo()
+        if not Config.AimNPC then
+            info.Text = "NPC selection is disabled"
+            return
+        end
+
+        local nearest
+        local shortest = Config.AimDistance
+
+        for _, npc in ipairs(GetNPCs()) do
+            local root = GetRoot(npc)
+            local humanoid = GetHumanoid(npc)
+
+            if root and humanoid and humanoid.Health > 0 then
+                local sameTeam =
+                    Config.TeamCheck
+                    and npc:GetAttribute("Team") ~= nil
+                    and Player:GetAttribute("Team") ~= nil
+                    and npc:GetAttribute("Team") == Player:GetAttribute("Team")
+
+                local distance = GetDistance(npc)
+
+                if not sameTeam and distance < shortest then
+                    shortest = distance
+                    nearest = npc
+                end
+            end
+        end
+
+        if nearest then
+            info.Text = "NPC: " .. nearest.Name
+                .. "\nDistance: " .. math.floor(shortest) .. " studs"
+        else
+            info.Text = "No NPC found"
+        end
+    end
+
+    Connections.TargetInfo = RunService.Heartbeat:Connect(UpdateTargetInfo)
+end
+
+-- ESP TAB
+
+local function ESPTab()
+    ClearContent()
+
+    Section("NPC ESP")
+
+    Toggle("Enable ESP", Config.ESP, function(v)
+        Config.ESP = v
+    end)
+
+    Toggle("Show Name", Config.ESPName, function(v)
+        Config.ESPName = v
+    end)
+
+    Toggle("Show Health", Config.ESPHealth, function(v)
+        Config.ESPHealth = v
+    end)
+
+    Toggle("Show Distance", Config.ESPDistance, function(v)
+        Config.ESPDistance = v
+    end)
+
+    Slider("ESP Distance", 100, 3000, Config.ESPMaxDistance, function(v)
+        Config.ESPMaxDistance = v
+    end)
+
+    Slider("Text Size", 8, 30, Config.ESPSize, function(v)
+        Config.ESPSize = v
+    end)
+
+    Section("TEAM COLORS")
+
+    for index, color in ipairs(TeamColors) do
+        local label = Instance.new("TextLabel")
+        label.Size = UDim2.new(1, -5, 0, 25)
+        label.BackgroundColor3 = color
+        label.Text = "TEAM COLOR " .. index
+        label.TextColor3 = Color3.new(0, 0, 0)
+        label.Font = Enum.Font.GothamBold
+        label.TextSize = 12
+        label.Parent = Content
+
+        Instance.new("UICorner", label)
+    end
+end
+
+-- HITBOX TAB
+
+local function HitboxTab()
+    ClearContent()
+
+    Section("NPC HITBOX DEBUGGER")
+
+    Toggle("Enable Hitbox Visual", Config.HitboxVisual, function(v)
+        Config.HitboxVisual = v
+    end)
+
+    Toggle("Show Head", Config.ShowHead, function(v)
+        Config.ShowHead = v
+    end)
+
+    Toggle("Show Body", Config.ShowBody, function(v)
+        Config.ShowBody = v
+    end)
+
+    Slider("Head Visual Scale", 1, 3, Config.HeadScale, function(v)
+        Config.HeadScale = v
+    end)
+
+    Slider("Body Visual Scale", 1, 3, Config.BodyScale, function(v)
+        Config.BodyScale = v
+    end)
+
+    Section("COLOR LEGEND")
+
+    local headLabel = Instance.new("TextLabel")
+    headLabel.Size = UDim2.new(1, -5, 0, 32)
+    headLabel.BackgroundColor3 = Colors.Head
+    headLabel.Text = "HEAD HITBOX - RED"
+    headLabel.TextColor3 = Color3.new(1, 1, 1)
+    headLabel.Font = Enum.Font.GothamBold
+    headLabel.Parent = Content
+
+    local bodyLabel = Instance.new("TextLabel")
+    bodyLabel.Size = UDim2.new(1, -5, 0, 32)
+    bodyLabel.BackgroundColor3 = Colors.Body
+    bodyLabel.Text = "BODY HITBOX - BLUE"
+    bodyLabel.TextColor3 = Color3.new(1, 1, 1)
+    bodyLabel.Font = Enum.Font.GothamBold
+    bodyLabel.Parent = Content
+
+    Instance.new("UICorner", headLabel)
+    Instance.new("UICorner", bodyLabel)
+
+    Section("VISUAL DEBUG ONLY")
+end
+
+-- SERVER TAB
+
+local function ServerTab()
+    ClearContent()
+
+    Section("SERVER MANAGEMENT")
+
+    ActionButton("REJOIN CURRENT SERVER", function()
+        TeleportService:TeleportToPlaceInstance(
+            game.PlaceId,
+            game.JobId,
+            Player
+        )
+    end)
+
+    ActionButton("RESET CHARACTER", function()
+        local character = GetCharacter()
+        local humanoid = character and GetHumanoid(character)
+
+        if humanoid then
+            humanoid.Health = 0
+        end
+    end)
+end
+
+-- PERFORMANCE TAB
+
+local function PerformanceTab()
+    ClearContent()
+
+    Section("PERFORMANCE")
+
+    local function SetPerformance(mode)
+        Config.Performance = mode
+
+        if mode == "Normal" then
+            Lighting.GlobalShadows = true
+            Lighting.EnvironmentDiffuseScale = 1
+            Lighting.EnvironmentSpecularScale = 1
+        else
+            Lighting.GlobalShadows = false
+            Lighting.EnvironmentDiffuseScale = 0
+            Lighting.EnvironmentSpecularScale = 0
+        end
+    end
+
+    ActionButton("NORMAL GRAPHICS", function()
+        SetPerformance("Normal")
+    end)
+
+    ActionButton("LOW GRAPHICS", function()
+        SetPerformance("Low")
+    end)
+
+    Section("LOW GRAPHICS REDUCES LIGHTING COST")
+end
+
+-- TAB SYSTEM
+
+local Tabs = {
+    {"AIM", AimTab},
+    {"ESP", ESPTab},
+    {"HITBOX", HitboxTab}
